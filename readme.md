@@ -2,7 +2,7 @@
 > Dockerfile
 ```dockerfile
 # Use an official Python runtime as a parent image
-FROM python:2.7-slim
+FROM python:3.7
 
 # Set the working directory to /app
 WORKDIR /app
