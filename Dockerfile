@@ -8,7 +8,7 @@ FROM python:3.7
 # If you prefer miniconda:
 #FROM continuumio/miniconda3
 
-LABEL Name=try_docker Version=0.0.1
+LABEL Name=friendlyhello Version=0.0.1
 EXPOSE 80
 
 WORKDIR /app

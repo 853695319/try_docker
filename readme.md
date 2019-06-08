@@ -238,3 +238,149 @@ docker container ls -q                                      # List container IDs
 docker stack rm <appname>                             # Tear down an application
 docker swarm leave --force      # Take down a single node swarm from the manager
 ```
+
+# Lecel:Swarm
+1.准备
+需要虚拟交换机`Primary virtual switch`  
+myswitch
+准备2个`virtual host`
+
+In Git Bash(administrator)
+```s
+$ echo $PWD
+/l/var/Hyper-V/my-docker-machine
+
+docker-machine -s $PWD \
+create -d hyperv \
+--engine-registry-mirror https://td9f8xn7.mirror.aliyuncs.com \
+--hyperv-virtual-switch "myswitch" \
+--hyperv-memory "1024" \
+manager
+
+$ docker-machine -s $PWD ls
+NAME      ACTIVE   DRIVER   STATE     URL                        SWARM   DOCKER     ERRORS
+manager   -        hyperv   Running   tcp://192.168.0.102:2376           v18.09.6
+
+docker-machine -s $PWD \
+create -d hyperv \
+--engine-registry-mirror https://td9f8xn7.mirror.aliyuncs.com \
+--hyperv-virtual-switch "myswitch" \
+--hyperv-memory "1024" \
+worker
+
+$ docker-machine -s $PWD ls
+NAME      ACTIVE   DRIVER   STATE     URL                        SWARM   DOCKER     ERRORS
+manager   -        hyperv   Running   tcp://192.168.0.102:2376           v18.09.6
+worker    -        hyperv   Running   tcp://192.168.0.103:2376           v18.09.6
+
+```
+踩坑记录：  
+1. 控制虚拟机内存大小，HOST内存不够也会失败,至少要1024
+2. -s $PWD 制定在当前路径下的machine
+
+```
+$ docker-machine ls
+NAME       ACTIVE   DRIVER   STATE     URL                        SWARM   DOCKER     ERRORS
+manager1   -        hyperv   Running   tcp://192.168.0.104:2376           v18.09.6
+worker1    -        hyperv   Running   tcp://192.168.0.105:2376           v18.09.6
+worker2    -        hyperv   Stopped                                      Unknown
+```
+2.Swarm manager
+```s
+$ docker-machine ssh manager1 "docker swarm init --advertise-addr 192.168.0.104"
+Swarm initialized: current node (ydfpt03uvyhapeh8xr41fooff) is now a manager.
+
+To add a worker to this swarm, run the following command:
+
+    docker swarm join --token SWMTKN-1-2m1uojx83emz3jjl8670sm3ghfjlevj5908hedvc94rgrip0sl-d3upr9dw5dmik0pempd7gwkfi 192.168.0.104:2377
+
+To add a manager to this swarm, run 'docker swarm join-token manager' and follow the instructions.
+```
+>NOTE: Ports 2377 and 2376
+>
+>Always run docker swarm init and docker swarm join with port 2377 (the swarm management port), or no port at all and let it take the default.
+>
+>The machine IP addresses returned by docker-machine ls include port 2376, which is the Docker daemon port. Do not use this port or you may experience errors.
+
+3.Swarm worker
+```s
+$ docker-machine ssh worker1 "docker swarm join --token SWMTKN-1-2m1uojx83emz3jjl8670sm3ghfjlevj5908hedvc94rgrip0sl-d3upr9dw5dmik0pempd7gwkfi 192.168.0.104:2377"
+
+This node joined a swarm as a worker.
+
+```
+
+4.确认Swarm是否成功  
+进入manager  
+In Git Bash(管理员)
+```s
+$ docker-machine env manager1
+export DOCKER_TLS_VERIFY="1"
+export DOCKER_HOST="tcp://192.168.0.104:2376"
+export DOCKER_CERT_PATH="C:\Users\Administrator\.docker\machine\machines\manager1"
+export DOCKER_MACHINE_NAME="manager1"
+export COMPOSE_CONVERT_WINDOWS_PATHS="true"
+# Run this command to configure your shell:
+# eval $("C:\Program Files\Docker\Docker\Resources\bin\docker-machine.exe" env manager1)
+
+$ eval $("C:\Program Files\Docker\Docker\Resources\bin\docker-machine.exe" env manager1)
+
+$ docker node ls
+ID                            HOSTNAME            STATUS              AVAILABILITY        MANAGER STATUS      ENGINE VERSION
+ydfpt03uvyhapeh8xr41fooff *   manager1            Ready               Active              Leader              18.09.6
+lrp0fkxjbosjyndrder0yn6ae     worker1             Ready               Active                                  18.09.6
+
+```
+如果想要重头再来一次操作,you can run `docker swarm leave` for *each node*.
+
+5.部署app到Swarm集群  
+注意，只能通过`manager`来执行`Docker Command`.  
+有两种方法通过`manager`执行命令
+  - you’ve been wrapping Docker commands in `docker-machine ssh` to talk to the VMs
+
+  - Another option is to run `docker-machine env <machine>` to get and run a command that configures your current shell to talk to the Docker daemon on the VM.  
+  推荐使用这种方法  
+  This method works better for the next step because **it allows you to use your local docker-compose.yml file to deploy the app “remotely” without having to copy it anywhere.**
+
+
+In Git Bash(管理员)
+```s
+$ docker-machine ls
+NAME       ACTIVE   DRIVER   STATE     URL                        SWARM   DOCKER     ERRORS
+manager1   *        hyperv   Running   tcp://192.168.0.104:2376           v18.09.6
+worker1    -        hyperv   Running   tcp://192.168.0.105:2376           v18.09.6
+worker2    -        hyperv   Stopped                                      Unknown
+
+# 可以看到当前SHELL已经进入manager VM，manager has been actived
+$ docker stack deploy -c docker-compose.yml getstartedlab
+Creating network getstartedlab_webnet
+Creating service getstartedlab_web
+Creating service getstartedlab_visualizer
+
+```
+
+```s
+docker-machine create --driver virtualbox myvm1 # Create a VM (Mac, Win7, Linux)
+docker-machine create -d hyperv --hyperv-virtual-switch "myswitch" myvm1 # Win10
+docker-machine env myvm1                # View basic information about your node
+docker-machine ssh myvm1 "docker node ls"         # List the nodes in your swarm
+docker-machine ssh myvm1 "docker node inspect <node ID>"        # Inspect a node
+docker-machine ssh myvm1 "docker swarm join-token -q worker"   # View join token
+docker-machine ssh myvm1   # Open an SSH session with the VM; type "exit" to end
+docker node ls                # View nodes in swarm (while logged on to manager)
+docker-machine ssh myvm2 "docker swarm leave"  # Make the worker leave the swarm
+docker-machine ssh myvm1 "docker swarm leave -f" # Make master leave, kill swarm
+docker-machine ls # list VMs, asterisk shows which VM this shell is talking to
+docker-machine start myvm1            # Start a VM that is currently not running
+docker-machine env myvm1      # show environment variables and command for myvm1
+eval $(docker-machine env myvm1)         # Mac command to connect shell to myvm1
+& "C:\Program Files\Docker\Docker\Resources\bin\docker-machine.exe" env myvm1 | Invoke-Expression   # Windows command to connect shell to myvm1
+docker stack deploy -c <file> <app>  # Deploy an app; command shell must be set to talk to manager (myvm1), uses local Compose file
+docker-machine scp docker-compose.yml myvm1:~ # Copy file to node's home dir (only required if you use ssh to connect to manager and deploy the app)
+docker-machine ssh myvm1 "docker stack deploy -c <file> <app>"   # Deploy an app using ssh (you must have first copied the Compose file to myvm1)
+eval $(docker-machine env -u)     # Disconnect shell from VMs, use native docker
+docker-machine stop $(docker-machine ls -q)               # Stop all running VMs
+docker-machine rm $(docker-machine ls -q) # Delete all VMs and their disk images
+```
+
+# Level:Stack
